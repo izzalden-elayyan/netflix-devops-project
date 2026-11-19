@@ -1,0 +1,404 @@
+
+services:
+
+  # ==================================
+  # PostgreSQL - Auth Database
+  # ==================================
+  auth-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: authdb
+      POSTGRES_USER: auth
+      POSTGRES_PASSWORD: auth
+    volumes:
+      - auth-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth -d authdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================================
+  # RabbitMQ - Message Broker
+  # ==================================
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================================
+  # Auth Service - Spring Boot
+  # ==================================
+  auth-service:
+    image: netflix-auth:1.0
+    build:
+      context: ./services/auth-service
+    environment:
+      DB_URL: jdbc:postgresql://auth-db:5432/authdb
+      DB_USER: auth
+      DB_PASSWORD: auth
+
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+
+    depends_on:
+      auth-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+    networks:
+      - backend
+
+    ports:
+      - "8081:8081"
+
+  # ==================================
+  # MongoDB - Catalog Database
+  # ==================================
+  catalog-db:
+    image: mongo:7
+    volumes:
+      - catalog-data:/data/db
+    networks:
+      - backend
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mongosh --quiet --eval 'db.adminCommand("ping").ok' | grep 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ==================================
+  # Catalog Service - NestJS
+  # ==================================
+  catalog-service:
+    image: netflix-catalog:1.0
+    build:
+      context: ./services/catalog-service
+    environment:
+      PORT: "3000"
+      MONGO_URL: mongodb://catalog-db:27017/catalogdb
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      JWT_SECRET: ${JWT_SECRET}
+
+    depends_on:
+      catalog-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+    networks:
+      - backend
+
+    ports:
+      - "3000:3000"
+
+  # ==================================
+  # PostgreSQL - Media Database
+  # ==================================
+  media-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: mediadb
+      POSTGRES_USER: media
+      POSTGRES_PASSWORD: media
+    volumes:
+      - media-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U media -d mediadb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================================
+  # Object Storage - MinIO Compatible
+  # ==================================
+  minio:
+    image: docker.io/pgsty/silo:RELEASE.2026-11-12T00-00-00Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "silo", "healthcheck", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ==================================
+  # Media Service - Django
+  # ==================================
+  media-service:
+    image: netflix-media:1.0
+    build:
+      context: ./services/media-service
+
+    environment:
+      DJANGO_SECRET_KEY: ${JWT_SECRET}
+      DJANGO_DEBUG: "false"
+
+      DB_HOST: media-db
+      DB_PORT: "5432"
+      DB_NAME: mediadb
+      DB_USER: media
+      DB_PASSWORD: media
+
+      JWT_SECRET: ${JWT_SECRET}
+
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: netflix-media
+      MEDIA_PUBLIC_BASE: /netflix-media
+
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+
+    depends_on:
+      media-db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+    networks:
+      - backend
+
+    ports:
+      - "8000:8000"
+
+  # ==================================
+  # PostgreSQL - Watchlist Database
+  # Container 9
+  # ==================================
+  watchlist-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: watchlistdb
+      POSTGRES_USER: watchlist
+      POSTGRES_PASSWORD: watchlist
+    volumes:
+      - watchlist-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U watchlist -d watchlistdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================================
+  # Watchlist Service - .NET 8
+  # Container 10
+  # ==================================
+  watchlist-service:
+    image: netflix-watchlist:1.0
+    build:
+      context: ./services/watchlist-service
+
+    environment:
+      ASPNETCORE_HTTP_PORTS: "8080"
+
+      ConnectionStrings__Default: "Host=watchlist-db;Port=5432;Database=watchlistdb;Username=watchlist;Password=watchlist"
+
+      Jwt__Secret: ${JWT_SECRET}
+
+      RabbitMq__Host: rabbitmq
+      RabbitMq__User: ${RABBITMQ_USER}
+      RabbitMq__Password: ${RABBITMQ_PASSWORD}
+
+    depends_on:
+      watchlist-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+    networks:
+      - backend
+
+    ports:
+      - "8082:8080"
+
+  # ==================================
+  # Media Worker - Django
+  # Container 11
+  # ==================================
+  media-worker:
+    image: netflix-media:1.0
+    command: python manage.py consume_events
+    restart: unless-stopped
+
+    environment:
+      DJANGO_SECRET_KEY: ${JWT_SECRET}
+      DJANGO_DEBUG: "false"
+
+      DB_HOST: media-db
+      DB_PORT: "5432"
+      DB_NAME: mediadb
+      DB_USER: media
+      DB_PASSWORD: media
+
+      JWT_SECRET: ${JWT_SECRET}
+
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: netflix-media
+      MEDIA_PUBLIC_BASE: /netflix-media
+
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+
+    depends_on:
+      media-db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+    networks:
+      - backend
+
+  # ==================================
+  # MFE Auth - React Micro-Frontend
+  # Container 12
+  # ==================================
+  mfe-auth:
+    image: netflix-mfe-auth:1.0
+    build:
+      context: ./frontends/mfe-auth
+
+    networks:
+      - backend
+
+    ports:
+      - "8083:80"
+
+  # ==================================
+  # MFE Browse - React Micro-Frontend
+  # Container 13
+  # ==================================
+  mfe-browse:
+    image: netflix-mfe-browse:1.0
+    build:
+      context: ./frontends/mfe-browse
+
+    networks:
+      - backend
+
+    ports:
+      - "8084:80"
+
+  # ==================================
+  # Shell - React Host
+  # Container 14
+  # ==================================
+  shell:
+    image: netflix-shell:1.0
+    build:
+      context: ./frontends/shell
+
+    depends_on:
+      - mfe-auth
+      - mfe-browse
+
+    networks:
+      - backend
+
+    ports:
+      - "8085:80"
+
+  # ==================================
+  # Studio - Next.js Admin
+  # Container 15
+  # ==================================
+  studio:
+    image: netflix-studio:1.0
+    build:
+      context: ./frontends/studio
+
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      HOSTNAME: 0.0.0.0
+
+    networks:
+      - backend
+
+    ports:
+      - "3001:3001"
+
+  # ==================================
+  # Gateway - Nginx Reverse Proxy
+  # Container 16
+  # ==================================
+  gateway:
+    image: netflix-gateway:1.0
+    build:
+      context: ./gateway
+
+    depends_on:
+      - auth-service
+      - catalog-service
+      - media-service
+      - watchlist-service
+      - mfe-auth
+      - mfe-browse
+      - shell
+      - studio
+      - minio
+
+    networks:
+      - backend
+
+    ports:
+      - "8090:80"
+
+# ==================================
+# Docker Networks
+# ==================================
+networks:
+  backend:
+    driver: bridge
+
+# ==================================
+# Docker Volumes
+# ==================================
+volumes:
+  auth-data:
+  rabbitmq-data:
+  catalog-data:
+  media-data:
+  minio-data:
+  watchlist-data:
