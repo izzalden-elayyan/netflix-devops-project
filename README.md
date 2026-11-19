@@ -6,7 +6,7 @@ the others only through HTTP (via the gateway) or **RabbitMQ events**.
 
 ```
                                    Browser
-                                      │  http://localhost:8080
+                                      │  http://localhost:8090
                                ┌──────▼──────┐
                                │   gateway   │  nginx — one entry point, path routing
                                └──────┬──────┘
@@ -39,8 +39,8 @@ docker compose ps             # wait until everything is "running"/"healthy"
 
 | URL | What |
 |---|---|
-| http://localhost:8080 | The app (sign in with **admin / admin123**, or sign up) |
-| http://localhost:8080/studio | Studio — create titles, upload poster / backdrop / video |
+| http://localhost:8090 | The app (sign in with **admin / admin123**, or sign up) |
+| http://localhost:8090/studio | Studio — create titles, upload poster / backdrop / video |
 | http://localhost:15672 | RabbitMQ UI (netflix / netflix) — watch queues and messages |
 | http://localhost:9001 | MinIO console (minioadmin / minioadmin) — browse uploaded files |
 
